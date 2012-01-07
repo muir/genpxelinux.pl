@@ -1,5 +1,6 @@
 genpxelinux.pl
 Makefile.PL
-META.yml
 MANIFEST
 CHANGELOG
+t/genpxelinux.t
+README

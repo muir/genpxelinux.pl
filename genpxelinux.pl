@@ -2,17 +2,18 @@
 
 package Linux::Bootloader::genpxelinux;
 
-our $VERSION = 0.21;
+our $VERSION = 0.22;
 
 my $tftpboot = "/tftpboot";
 my $cfg = "pxelinux.cfg";
-my $template = "$tftpboot/$cfg/template.gen";
+my $template;
 my $menufmt = "%15s %s\n";
 my $menudir = "menus";
 my $max_levels = 100; # variable substitution recursion
 my $debug = 0;
 
 use strict;
+use warnings;
 use File::Slurp;
 use Getopt::Long;
 use Text::Tabs;
@@ -54,6 +55,8 @@ GetOptions(
 ) or die usage();
 die usage() if @ARGV;
 
+$template = "$tftpboot/$cfg/template.gen" unless defined $template;
+
 readconfig($template);
 
 die "must define default menu" unless $menu_overrides{default}{DISPLAY} || $menus{DISPLAY};
@@ -75,7 +78,7 @@ for my $sys (keys %systems) {
 	# write menu files
 
 	for my $menu (qw(DISPLAY F1 F2 F3 F4 F5 F6 F7 F8 F9)) {
-		my $contents = $menu_overrides{$sys}{$menu} || $menus{$menu};
+		my $contents = $menu_overrides{$sys}{$menu} || $menus{$menu} || '';
 
 		if ($sys eq 'default' || $menu_overrides{$sys}{$menu} || $contents =~ /\$\(.*?\)/) {
 			my $contents = $menu_overrides{$sys}{$menu} || $menus{$menu};
@@ -149,6 +152,7 @@ sub var_sub
 		return;
 	}
 
+	pos($$raw) = 0;
 	while ($$raw =~ m/\G(.*?)\$\((\S+)\)/gsc) {
 		$$cooked .= $1;
 		if (exists $vars->{$2}) {
@@ -162,12 +166,10 @@ sub var_sub
 sub readconfig
 {
 	my($input) = @_;
-	local(*INPUT);
 	local($.);
-	print STDERR "Reading $input...\n" if $debug;
-	open(INPUT, "<$input") || die "open $input: $!";
+	open my $ifh, "<", $input or die "open $input: $!";
 	MAIN:
-	while(<INPUT>) {
+	while(<$ifh>) {
 		chomp;
 		s/\s+$//;
 		if (/^\s*$/) {
@@ -200,7 +202,7 @@ sub readconfig
 			warn "LABEL $label duplicated at $input:$. and $labels{$label}" if $labels{$label};
 			$labels{$label} = "$input:$.";
 			$body .= "$_\n";
-			while(<INPUT>) {
+			while(<$ifh>) {
 				redo MAIN if /^\S/;
 				$body .= $_;
 				if (     /^\s+#\s*ITEM\s+($menurx\S*)\s+<(\S+)>\s+(\S.*)/) {
@@ -235,7 +237,7 @@ sub readconfig
 			# #END
 			#
 			my ($menu, $var) = ($1, $2);
-			my $buf = readmenu($input, \*INPUT, $menu);
+			my $buf = readmenu($input, $ifh, $menu);
 			addmenu($input, $menu, $buf, var => $var);
 			$lastmenu = $menu;
 		} elsif (/^#MENU\s+(\S+)\s+(\S+)\s*$/) {
@@ -246,7 +248,7 @@ sub readconfig
 			# #END
 			#
 			my ($menu, $system) = ($1, $2);
-			my $buf = readmenu($input, \*INPUT, $menu);
+			my $buf = readmenu($input, $ifh, $menu);
 			addmenu($input, $menu, $buf, system => $system);
 			$lastmenu = $menu;
 		} elsif (/^#MENU\s+(\S+)\s*$/) {
@@ -257,7 +259,7 @@ sub readconfig
 			# #END
 			#
 			my $menu = $1;
-			my $buf = readmenu($input, \*INPUT, $menu);
+			my $buf = readmenu($input, $ifh, $menu);
 			addmenu($input, $menu, $buf);
 			$lastmenu = $menu;
 		} elsif (/^#SYSTEM\s+(\S+)\s+(\S+)/) {
@@ -352,7 +354,7 @@ sub readconfig
 			warn "Could not parse line at $input:$.: $_";
 		}
 	}
-	close(INPUT);
+	close($ifh);
 }
 
 sub addmenuitem
@@ -437,6 +439,8 @@ Usage: $0 [--tftpboot dir] [--template file] [--debug level]
 END
 }
 
+'completed';
+
 __END__
 
 =head1 NAME
@@ -471,18 +475,18 @@ like menu.c32 to provide menus.
  PROMPT 1
 
  #SET 9600 9600
- 
+
  #SYSTEM	01-00-06-5b-3a-31-d1 dell1
  #FOR dell1	#SET memlimit mem=3050m
  #FOR dell1	DEFAULT nfs2
- 
+
  #SYSTEM 01-00-06-5b-04-cb-4d dell2
  #FOR dell2	#SET memlimit mem=3050m
  #FOR dell2	DEFAULT nfs1
- 
+
  # must set $(nfs1) and $(nfs2)
- #INCLUDE /tftpboot/pxelinux.cfg/config.gen
- 
+ #INCLUDE config.gen
+
  #MENU DISPLAY
  <Ctrl-F><digit> for menus:
  1-disk booting  3-Disk tools      5-tbd         7-dell stuff    9-tbd
@@ -490,170 +494,171 @@ like menu.c32 to provide menus.
  DEFAULT is $(directive_DEFAULT)
 
  #END
- 
+
  ############################################################################
  #MENU F1
- 			Disk Booting
+		 Disk Booting
  #END
  ############################################################################
- 
+
  LABEL disk
- 	# MENU		localboot
- 	LOCALBOOT 0
+	 #ITEM		localboot
+	 LOCALBOOT 0
  LABEL lb80
- 	# MENU		"localboot 0x80"
- 	LOCALBOOT 0x80
+	 #ITEM		"localboot 0x80"
+	 LOCALBOOT 0x80
  LABEL lb81
- 	# MENU		"localboot 0x81"
- 	LOCALBOOT 0x81
+	 #ITEM		"localboot 0x81"
+	 LOCALBOOT 0x81
  LABEL hd0mbr
- 	# MENU		<hd[0123]mbr>     mbr boot off disk 0,1,2,3
- 	KERNEL	chain.c32
- 	APPEND	hd0
+	 #ITEM		<hd[0123]mbr>     mbr boot off disk 0,1,2,3
+	 KERNEL	chain.c32
+	 APPEND	hd0
  LABEL hd0a
- 	# MENU		<hd[0123][abcd]>  boot off disk 0,1,2,3 partition a-d (1-4)
- 	KERNEL	chain.c32
- 	APPEND	hd0 1
+	 #ITEM		<hd[0123][abcd]>  boot off disk 0,1,2,3 partition a-d (1-4)
+	 KERNEL	chain.c32
+	 APPEND	hd0 1
  LABEL hd0b
- 	KERNEL	chain.c32
- 	APPEND	hd0 2
+	 KERNEL	chain.c32
+	 APPEND	hd0 2
  LABEL hd0c
- 	KERNEL	chain.c32
- 	APPEND	hd0 3
+	 KERNEL	chain.c32
+	 APPEND	hd0 3
  LABEL hd0d
- 	KERNEL	chain.c32
- 	APPEND	hd0 4
- 
- LABEL hd1mbr
- 	KERNEL	chain.c32
- 	APPEND	hd1
+	 KERNEL	chain.c32
+	 APPEND	hd0 4
+
+ LABEL hj1mbr
+	 KERNEL	chain.c32
+	 APPEND	hd1
  LABEL hd1a
- 	KERNEL	chain.c32
- 	APPEND	hd1 1
+	 KERNEL	chain.c32
+	 APPEND	hd1 1
  LABEL hd1b
- 	KERNEL	chain.c32
- 	APPEND	hd1 2
+	 KERNEL	chain.c32
+	 APPEND	hd1 2
  LABEL hd1c
- 	KERNEL	chain.c32
- 	APPEND	hd1 3
+	 KERNEL	chain.c32
+	 APPEND	hd1 3
  LABEL hd1d
- 	KERNEL	chain.c32
- 	APPEND	hd1 4
- 
+	 KERNEL	chain.c32
+	 APPEND	hd1 4
+
  LABEL hd2mbr
- 	KERNEL	chain.c32
- 	APPEND	hd2
+	 KERNEL	chain.c32
+	 APPEND	hd2
  LABEL hd2a
- 	KERNEL	chain.c32
- 	APPEND	hd2 1
+	 KERNEL	chain.c32
+	 APPEND	hd2 1
  LABEL hd2b
- 	KERNEL	chain.c32
- 	APPEND	hd2 2
+	 KERNEL	chain.c32
+	 APPEND	hd2 2
  LABEL hd2c
- 	KERNEL	chain.c32
- 	APPEND	hd2 3
+	 KERNEL	chain.c32
+	 APPEND	hd2 3
  LABEL hd2d
- 	KERNEL	chain.c32
- 	APPEND	hd2 4
- 
+	 KERNEL	chain.c32
+	 APPEND	hd2 4
+
  LABEL hd3mbr
- 	KERNEL	chain.c32
- 	APPEND	hd3
+	 KERNEL	chain.c32
+	 APPEND	hd3
  LABEL hd3a
- 	KERNEL	chain.c32
- 	APPEND	hd3 1
+	 KERNEL	chain.c32
+	 APPEND	hd3 1
  LABEL hd3b
- 	KERNEL	chain.c32
- 	APPEND	hd3 2
+	 KERNEL	chain.c32
+	 APPEND	hd3 2
  LABEL hd3c
- 	KERNEL	chain.c32
- 	APPEND	hd3 3
+	 KERNEL	chain.c32
+	 APPEND	hd3 3
  LABEL hd3d
- 	KERNEL	chain.c32
- 	APPEND	hd3 4
- 
- 
+	 KERNEL	chain.c32
+	 APPEND	hd3 4
+
+
  ############################################################################
  #MENU F2
- 			Linux Recovery Mode
+		 Linux Recovery Mode
  #END
  ############################################################################
- 
+
  LABEL nfs1
- 	#MENU		Diskless, $(nfs1)
- 	KERNEL linux/staid-vmlinuz-2.6.12-3
- 	APPEND root=/dev/nfs nfsroot=$(nfs1) console=tty0 console=ttyS0,$(9600) panic=30 no1394 $(memlimit)
- 	IPAPPEND 1
- 
+	 #ITEM		Diskless, $(nfs1)
+	 KERNEL linux/staid-vmlinuz-2.6.12-3
+	 APPEND root=/dev/nfs nfsroot=$(nfs1) console=tty0 console=ttyS0,$(9600) panic=30 no1394 $(memlimit)
+	 IPAPPEND 1
+
  LABEL nfs2
- 	#MENU		Diskless, $(nfs2)
- 	KERNEL linux/staid-vmlinuz-2.6.12-3
- 	APPEND root=/dev/nfs nfsroot=$(nfs2) console=tty0 console=ttyS0,$(9600) panic=30 no1394 $(memlimit)
- 	IPAPPEND 1
- 
+	 #ITEM		Diskless, $(nfs2)
+	 KERNEL linux/staid-vmlinuz-2.6.12-3
+	 APPEND root=/dev/nfs nfsroot=$(nfs2) console=tty0 console=ttyS0,$(9600) panic=30 no1394 $(memlimit)
+	 IPAPPEND 1
+
  ############################################################################
  #MENU F3
- 			Disk Tools
+		 Disk Tools
  #END
  ############################################################################
- 
+
  LABEL ibm1
- 	#MENU F3	IBM's Drive Fitness Test
- 	KERNEL memdisk
- 	APPEND initrd=tools/dft32_v405_b00_install.img
+	 #ITEM F3	IBM's Drive Fitness Test
+	 KERNEL memdisk
+	 APPEND initrd=tools/dft32_v405_b00_install.img
  LABEL ibm2
- 	#MENU F3	IBM's Drive Feature Tool
- 	KERNEL memdisk
- 	APPEND initrd=tools/ftool_198_install.img
+	 #ITEM F3	IBM's Drive Feature Tool
+	 KERNEL memdisk
+	 APPEND initrd=tools/ftool_198_install.img
  LABEL maxtor
- 	#MENU F3	Maxtor's MaxBlast
- 	KERNEL memdisk
- 	APPEND initrd=tools/maxblast.img
+	 #ITEM F3	Maxtor's MaxBlast
+	 KERNEL memdisk
+	 APPEND initrd=tools/maxblast.img
  LABEL seagate
- 	#MENU F3	Seagate Seatools
- 	KERNEL memdisk
- 	APPEND initrd=tools/seatools-1.09.img
+	 #ITEM F3	Seagate Seatools
+	 KERNEL memdisk
+	 APPEND initrd=tools/seatools-1.09.img
  LABEL killdisk
- 	#MENU F3	killdisk from the ultimate boot cdrom
- 	KERNEL memdisk
- 	APPEND initrd=tools/killdisk.img
- 
+	 #ITEM F3	killdisk from the ultimate boot cdrom
+	 KERNEL memdisk
+	 APPEND initrd=tools/killdisk.img
+
  ############################################################################
  #MENU F4
- 			Hardware Testing
+		 Hardware Testing
  #END
  ############################################################################
- 
+
  LABEL memtest86+
- 	#MENU F4	MemTest86+, http://www.memtest.org
- 	KERNEL memdisk
- 	APPEND initrd=tools/memtest86+-1.70.img
+	 #ITEM F4	MemTest86+, http://www.memtest.org
+	 KERNEL memdisk
+	 APPEND initrd=tools/memtest86+-1.70.img
  LABEL memtest+
- 	KERNEL memdisk
- 	APPEND initrd=tools/memtest86+-1.70.img
+	 KERNEL memdisk
+	 APPEND initrd=tools/memtest86+-1.70.img
  LABEL memtest
- 	#MENU F4	memtest86
- 	KERNEL memdisk
- 	APPEND initrd=tools/memtest86.img
+	 #ITEM F4	memtest86
+	 KERNEL memdisk
+	 APPEND initrd=tools/memtest86.img
  LABEL memtest86
- 	KERNEL memdisk
- 	APPEND initrd=tools/memtest86.img
+	 KERNEL memdisk
+	 APPEND initrd=tools/memtest86.img
  LABEL sniff
- 	#MENU F4	PCI Sniffer, http://www.miray.de/products/sat.pcisniffer.html
- 	KERNEL memdisk
- 	APPEND initrd=tools/pcisniffer.img
- 
+	 #ITEM F4	PCI Sniffer, http://www.miray.de/products/sat.pcisniffer.html
+	 KERNEL memdisk
+	 APPEND initrd=tools/pcisniffer.img
+
  ############################################################################
  #MENU F6
- 			Miscellaneous Stuff
+		 Miscellaneous Stuff
  #END
  ############################################################################
- 
+
  LABEL ntpasswd
- 	#MENU F6	NT Registry & Password reset tool
- 	# http://home.eunet.no/~pnordahl/ntpasswd/bootdisk.html
- 	KERNEL memdisk
- 	APPEND initrd=tools/bd050303.bin
+	 #ITEM F6	NT Registry & Password reset tool
+	 # http://home.eunet.no/~pnordahl/ntpasswd/bootdisk.html
+	 KERNEL memdisk
+	 APPEND initrd=tools/bd050303.bin
+
 
 =head1 MACROS 
 
@@ -672,7 +677,7 @@ of writing ethernet mac addresses: 01-hh-hh-hh-hh-hh-hh.  The
 #SYSTEM parameter will accept the pxelinux version or you can
 write the address in the more usual HH:HH:HH:HH:HH:HH format.
 
-Pxelinux also looks things up by their IP address written 
+Pxelinuxalso looks things up by their IP address written 
 in hex.  And shortened one hex digit at a time.  The #SYSTEM
 parameter will accept IP addresses written in the normal 
 dotted-quad format and convert them to the pxelinux hex format.
@@ -802,15 +807,10 @@ The default locations for things are:
 
 L<http://syslinux.zytor.com/pxe.php>
 
-=head1 THANK THE AUTHOR
-
-If you need high-speed internet services (T1, T3, OC3 etc), please 
-send me your request-for-quote.  I have access to very good pricing:
-you'll save money and get a great service.
-
 =head1 LICENSE
 
-Copyright(C) 2007 David Muir Sharnoff <perlworks@dave.sharnoff.org>
+Copyright (C) 2007 David Muir Sharnoff <cpan@dave.sharnoff.org>
+Copyright (C) 2012 Google, Inc.
 This module may be used and distributed on the same terms
 as Perl itself.
 
